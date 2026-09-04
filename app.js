@@ -1528,9 +1528,22 @@ function initScanlines() {
 }
 
 /* ---------------- PWA: service worker registration ---------------- */
+// A new service worker takes over an already-open tab via skipWaiting() +
+// clients.claim() (see service-worker.js), but that only swaps which worker
+// answers future network requests — the page itself keeps running the old
+// HTML/CSS/JS already in memory until it's reloaded. Auto-reload once when
+// that handover happens so a deploy is visible without the user having to
+// know to refresh (previously needed two manual reloads on some devices).
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js").catch(err => console.error("SW registration failed", err));
+
+    let reloadedForUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloadedForUpdate) return;
+      reloadedForUpdate = true;
+      window.location.reload();
+    });
   });
 }
 
