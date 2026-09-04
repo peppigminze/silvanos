@@ -321,8 +321,8 @@ function renderWeightChart(sorted) {
     type: "line",
     data: { labels, datasets: [{
       label: "Gewicht (kg)", data: values,
-      borderColor: "#4CE0B3", backgroundColor: "rgba(76,224,179,0.08)",
-      tension: 0.3, fill: true, pointRadius: 2, pointBackgroundColor: "#4CE0B3",
+      borderColor: accentHex, backgroundColor: `rgba(${accentRgbTriplet},0.08)`,
+      tension: 0.3, fill: true, pointRadius: 2, pointBackgroundColor: accentHex,
     }] },
     options: {
       responsive: true,
@@ -446,7 +446,7 @@ function renderExerciseHistory() {
     type: "line",
     data: { labels, datasets: [{
       label: "Gewicht (kg)", data: points.map(p => p.weight),
-      borderColor: "#4CE0B3", backgroundColor: "rgba(76,224,179,0.08)",
+      borderColor: accentHex, backgroundColor: `rgba(${accentRgbTriplet},0.08)`,
       tension: 0.3, fill: true, pointRadius: 2, spanGaps: true,
     }] },
     options: {
@@ -1328,19 +1328,201 @@ document.getElementById("authConnectForm").addEventListener("submit", async e =>
 
 document.getElementById("logoutBtn").addEventListener("click", () => logout());
 
-/* ---------------- SCANLINE BACKGROUND ---------------- */
-function initScanlines() {
-  const canvas = document.getElementById("scanlines");
-  const ctx = canvas.getContext("2d");
-  function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; draw(); }
-  function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "rgba(76,224,179,0.025)";
-    ctx.lineWidth = 1;
-    for (let y = 0; y < canvas.height; y += 3) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
-    ctx.strokeStyle = "rgba(76,224,179,0.015)";
-    for (let x = 0; x < canvas.width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+/* ================= COLOR THEME (presets + custom combos) =================
+   Only 4 colors are user-facing (background, panel, accent, text) — the rest
+   of the palette (borders, muted text, the dimmed accent, chart/scanline
+   colors) is derived from them so every combo stays internally consistent.
+   Stored locally per browser (not synced) since it's a display preference,
+   not app data. ================================================================= */
+const THEME_KEY = "silvanos_theme_v1";
+const THEME_PRESETS = {
+  mint:   { bg: "#0A0E14", panel: "#12181F", accent: "#4CE0B3", text: "#E6EDF3" },
+  amber:  { bg: "#120E09", panel: "#1E160D", accent: "#E0A64C", text: "#F3ECE0" },
+  violet: { bg: "#0B0A14", panel: "#171224", accent: "#9B6CE0", text: "#ECE6F3" },
+  rose:   { bg: "#140A0E", panel: "#221217", accent: "#E0537F", text: "#F3E6EA" },
+  blue:   { bg: "#080E14", panel: "#0F1A24", accent: "#4CA6E0", text: "#E6EEF3" },
+};
+const THEME_PRESET_LABELS = { mint: "Mint", amber: "Amber", violet: "Violett", rose: "Rosé", blue: "Blau" };
+
+let accentHex = THEME_PRESETS.mint.accent;
+let accentRgbTriplet = "76,224,179";
+let scanlineCanvas, scanlineCtx; // set by initScanlines() during boot(); drawScanlines() no-ops until then
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex({ r, g, b }) {
+  return "#" + [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+}
+function rgbToHsl({ r, g, b }) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
   }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+function hslToRgb({ h, s, l }) {
+  h /= 360; s /= 100; l /= 100;
+  if (s === 0) { const v = l * 255; return { r: v, g: v, b: v }; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return { r: hue2rgb(p, q, h + 1 / 3) * 255, g: hue2rgb(p, q, h) * 255, b: hue2rgb(p, q, h - 1 / 3) * 255 };
+}
+function adjustLightness(hex, deltaPercent) {
+  const hsl = rgbToHsl(hexToRgb(hex));
+  hsl.l = Math.max(0, Math.min(100, hsl.l + deltaPercent));
+  return rgbToHex(hslToRgb(hsl));
+}
+function mixHex(hexA, hexB, weightA) {
+  const a = hexToRgb(hexA), b = hexToRgb(hexB);
+  return rgbToHex({
+    r: a.r * weightA + b.r * (1 - weightA),
+    g: a.g * weightA + b.g * (1 - weightA),
+    b: a.b * weightA + b.b * (1 - weightA),
+  });
+}
+
+function deriveTheme({ bg, panel, accent, text }) {
+  const { r, g, b } = hexToRgb(accent);
+  return {
+    bg, panel, text, accent,
+    panelBorder: adjustLightness(panel, 10),
+    accentDim: adjustLightness(accent, -20),
+    textMuted: mixHex(text, bg, 0.55),
+    accentRgb: `${r},${g},${b}`,
+  };
+}
+
+function applyTheme(theme) {
+  const t = deriveTheme(theme);
+  const root = document.documentElement.style;
+  root.setProperty("--bg", t.bg);
+  root.setProperty("--panel", t.panel);
+  root.setProperty("--panel-border", t.panelBorder);
+  root.setProperty("--mint", t.accent);
+  root.setProperty("--mint-dim", t.accentDim);
+  root.setProperty("--text", t.text);
+  root.setProperty("--text-muted", t.textMuted);
+  root.setProperty("--mint-rgb", t.accentRgb);
+  accentHex = t.accent;
+  accentRgbTriplet = t.accentRgb;
+  drawScanlines();
+  if (currentAccountId) renderFitness();
+}
+
+function loadTheme() {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    return raw ? JSON.parse(raw) : THEME_PRESETS.mint;
+  } catch (e) {
+    return THEME_PRESETS.mint;
+  }
+}
+
+function populateThemeCustomInputs(theme) {
+  document.getElementById("themeBg").value = theme.bg;
+  document.getElementById("themePanelColor").value = theme.panel;
+  document.getElementById("themeAccent").value = theme.accent;
+  document.getElementById("themeText").value = theme.text;
+}
+
+function setTheme(theme) {
+  applyTheme(theme);
+  localStorage.setItem(THEME_KEY, JSON.stringify(theme));
+  populateThemeCustomInputs(theme);
+  renderThemePresetActive(theme);
+}
+
+function renderThemePresets() {
+  const container = document.getElementById("themePresets");
+  container.innerHTML = "";
+  Object.entries(THEME_PRESETS).forEach(([key, theme]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "theme-preset-btn";
+    btn.dataset.preset = key;
+    btn.innerHTML = `
+      <span class="theme-preset-swatch">
+        <span style="background:${theme.bg}"></span>
+        <span style="background:${theme.panel}"></span>
+        <span style="background:${theme.accent}"></span>
+      </span>
+      <span class="theme-preset-name">${THEME_PRESET_LABELS[key] || key}</span>
+    `;
+    container.appendChild(btn);
+  });
+}
+
+function renderThemePresetActive(theme) {
+  document.querySelectorAll(".theme-preset-btn").forEach(btn => {
+    const preset = THEME_PRESETS[btn.dataset.preset];
+    const match = preset && preset.bg === theme.bg && preset.panel === theme.panel &&
+      preset.accent === theme.accent && preset.text === theme.text;
+    btn.classList.toggle("active", !!match);
+  });
+}
+
+document.getElementById("themeToggleBtn").addEventListener("click", () => {
+  document.getElementById("themePanel").classList.toggle("hidden");
+});
+document.getElementById("themePresets").addEventListener("click", e => {
+  const btn = e.target.closest(".theme-preset-btn");
+  if (!btn) return;
+  setTheme(THEME_PRESETS[btn.dataset.preset]);
+});
+document.getElementById("themeResetBtn").addEventListener("click", () => setTheme(THEME_PRESETS.mint));
+["themeBg", "themePanelColor", "themeAccent", "themeText"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    setTheme({
+      bg: document.getElementById("themeBg").value,
+      panel: document.getElementById("themePanelColor").value,
+      accent: document.getElementById("themeAccent").value,
+      text: document.getElementById("themeText").value,
+    });
+  });
+});
+
+renderThemePresets();
+const initialTheme = loadTheme();
+applyTheme(initialTheme);
+populateThemeCustomInputs(initialTheme);
+renderThemePresetActive(initialTheme);
+
+/* ---------------- SCANLINE BACKGROUND ---------------- */
+function drawScanlines() {
+  if (!scanlineCtx) return;
+  const canvas = scanlineCanvas, ctx = scanlineCtx;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = `rgba(${accentRgbTriplet},0.025)`;
+  ctx.lineWidth = 1;
+  for (let y = 0; y < canvas.height; y += 3) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+  ctx.strokeStyle = `rgba(${accentRgbTriplet},0.015)`;
+  for (let x = 0; x < canvas.width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+}
+function initScanlines() {
+  scanlineCanvas = document.getElementById("scanlines");
+  scanlineCtx = scanlineCanvas.getContext("2d");
+  function resize() { scanlineCanvas.width = window.innerWidth; scanlineCanvas.height = window.innerHeight; drawScanlines(); }
   window.addEventListener("resize", resize);
   resize();
 }

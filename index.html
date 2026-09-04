@@ -74,6 +74,7 @@
     <div class="status-id">
       <span class="status-tag">USER</span>
       <span class="status-value" id="currentUserLabel">SILVAN</span>
+      <button class="theme-toggle" id="themeToggleBtn" type="button" title="Farben anpassen">🎨</button>
       <button class="status-logout" id="logoutBtn" type="button" title="Abmelden">⏻</button>
     </div>
     <div class="status-xp">
@@ -91,6 +92,21 @@
 
   <!-- LEVEL UP TOAST -->
   <div id="levelUpToast" class="levelup-toast hidden">LEVEL UP → <span id="levelUpNum"></span></div>
+
+  <!-- COLOR / THEME CUSTOMIZATION -->
+  <section class="panel theme-panel hidden" id="themePanel">
+    <div class="theme-panel-head">
+      <span class="status-tag">FARBEN</span>
+      <button class="theme-reset" id="themeResetBtn" type="button">Zurücksetzen</button>
+    </div>
+    <div class="theme-presets" id="themePresets"></div>
+    <div class="theme-custom">
+      <label>Hintergrund <input type="color" id="themeBg"></label>
+      <label>Panel <input type="color" id="themePanelColor"></label>
+      <label>Akzent <input type="color" id="themeAccent"></label>
+      <label>Text <input type="color" id="themeText"></label>
+    </div>
+  </section>
 
   <!-- CLOUD SYNC -->
   <section class="panel sync-panel" id="panel-sync">
