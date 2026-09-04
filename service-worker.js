@@ -1,4 +1,4 @@
-const CACHE_NAME = "silvanos-cache-v1";
+const CACHE_NAME = "silvanos-cache-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -26,26 +26,25 @@ self.addEventListener("activate", event => {
   self.clients.claim();
 });
 
-// Cache-first for app shell, network-first for everything else (CDN libs, GitHub API)
+// Network-first for the app shell (so a deploy is visible immediately while
+// online, e.g. no CSS/JS staying stale behind an old cached copy), falling
+// back to the cache when offline. Cross-origin requests (Chart.js CDN,
+// api.github.com) are left to the network as before.
 self.addEventListener("fetch", event => {
   const req = event.request;
   const url = new URL(req.url);
 
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then(cached => {
-        const fetchPromise = fetch(req)
-          .then(res => {
-            if (res && res.status === 200) {
-              const resClone = res.clone();
-              caches.open(CACHE_NAME).then(cache => cache.put(req, resClone));
-            }
-            return res;
-          })
-          .catch(() => cached);
-        return cached || fetchPromise;
-      })
+      fetch(req)
+        .then(res => {
+          if (res && res.status === 200) {
+            const resClone = res.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(req, resClone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
     );
   }
-  // cross-origin (Chart.js CDN, api.github.com) -> just let the network handle it
 });
