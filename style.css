@@ -90,6 +90,72 @@ body{
   100%{transform:translateX(-50%) translateY(0) scale(1); opacity:1;}
 }
 
+.status-logout{
+  background:transparent; border:1px solid var(--panel-border); color:var(--text-muted);
+  font-size:12px; padding:2px 8px; margin-left:10px; cursor:pointer; line-height:1.4;
+}
+.status-logout:hover{border-color:var(--red); color:var(--red);}
+
+/* login / accounts */
+.authscreen{
+  position:fixed; inset:0; background:var(--bg); z-index:100;
+  display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.authscreen.hidden{display:none;}
+.auth-box{width:100%; max-width:380px;}
+.auth-title{
+  font-family:var(--mono); color:var(--mint); font-size:16px; letter-spacing:1px;
+  margin-bottom:20px; text-align:center;
+}
+.auth-step.hidden, #authMigrateForm.hidden, #authMain.hidden{display:none;}
+.auth-note{font-size:12px; color:var(--text-muted); line-height:1.6; margin:0 0 14px;}
+.auth-sub{font-family:var(--mono); font-size:12px; color:var(--text-muted); margin:0 0 10px;}
+
+#authMigrateForm, #authConnectForm{display:flex; flex-direction:column; gap:10px;}
+#authMigrateForm input, #authConnectForm input, .auth-password-form input{
+  background:#0D1319; border:1px solid var(--panel-border); color:var(--text);
+  padding:10px 12px; font-family:var(--sans); font-size:13px;
+}
+#authMigrateForm input:focus, #authConnectForm input:focus, .auth-password-form input:focus{
+  outline:none; border-color:var(--mint);
+}
+#authMigrateForm button[type="submit"], #authConnectForm button[type="submit"], .auth-password-form button[type="submit"]{
+  background:var(--mint); color:#0A0E14; border:none; font-family:var(--mono);
+  font-weight:700; font-size:12px; padding:10px 16px; cursor:pointer; letter-spacing:0.5px;
+}
+#authMigrateForm button[type="submit"]:hover, #authConnectForm button[type="submit"]:hover, .auth-password-form button[type="submit"]:hover{
+  background:#63e8c1;
+}
+
+.auth-account-list{display:flex; flex-direction:column; gap:8px; margin-bottom:14px;}
+.auth-account-btn{
+  background:var(--panel); border:1px solid var(--panel-border); color:var(--text);
+  font-family:var(--mono); font-size:13px; padding:12px 14px; cursor:pointer;
+  text-align:left; letter-spacing:0.3px; width:100%;
+}
+.auth-account-btn:hover{border-color:var(--mint); color:var(--mint);}
+
+.auth-password-form{display:flex; flex-direction:column; gap:10px; margin-bottom:14px;}
+.auth-password-form.hidden{display:none;}
+.auth-back{
+  background:transparent; border:none; color:var(--text-muted); font-family:var(--mono);
+  font-size:11px; padding:2px 0; cursor:pointer; text-align:left; text-decoration:underline;
+}
+.auth-back:hover{color:var(--mint);}
+
+.auth-toggle{
+  width:100%; background:transparent; border:1px dashed var(--panel-border); color:var(--text-muted);
+  font-family:var(--mono); font-size:11px; padding:10px; cursor:pointer; letter-spacing:0.5px;
+}
+.auth-toggle.hidden{display:none;}
+.auth-toggle:hover{border-color:var(--mint); color:var(--mint);}
+.auth-connect-form.hidden, #authConnectForm.hidden{display:none;}
+
+.auth-error{color:var(--red); font-family:var(--mono); font-size:12px; margin-top:14px;}
+.auth-error.hidden{display:none;}
+.auth-busy{color:var(--text-muted); font-family:var(--mono); font-size:12px; margin-top:14px;}
+.auth-busy.hidden{display:none;}
+
 /* cloud sync */
 .sync-panel{padding:14px 20px; margin-bottom:24px;}
 .sync-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap;}

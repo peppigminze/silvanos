@@ -26,13 +26,55 @@
   <div class="boot-line">SILVAN.OS v2.0 — INITIALIZING<span class="cursor">_</span></div>
 </div>
 
+<!-- LOGIN / ACCOUNTS -->
+<div id="authScreen" class="authscreen hidden">
+  <div class="auth-box">
+    <div class="auth-title">SILVAN.OS<span class="cursor">_</span></div>
+
+    <!-- one-time: existing pre-account data found on this device -->
+    <form id="authMigrateForm" class="auth-step hidden">
+      <p class="auth-note">Bestehende lokale Daten gefunden. Leg ein Konto an, um sie zu behalten.</p>
+      <input type="email" id="migrateEmailInput" placeholder="E-Mail / Benutzername" required autocomplete="username">
+      <input type="password" id="migratePasswordInput" placeholder="Neues Passwort für dieses Gerät" required autocomplete="new-password">
+      <button type="submit">KONTO ANLEGEN</button>
+    </form>
+
+    <div id="authMain" class="auth-step hidden">
+      <div id="authAccountList" class="auth-account-list"></div>
+
+      <form id="authPasswordForm" class="auth-password-form hidden">
+        <p class="auth-sub" id="authPasswordEmail"></p>
+        <input type="password" id="authPasswordInput" placeholder="Passwort" required autocomplete="current-password">
+        <button type="submit">ANMELDEN</button>
+        <button type="button" class="auth-back" id="authPasswordBackBtn">‹ zurück</button>
+      </form>
+
+      <button class="auth-toggle" id="authConnectToggleBtn" type="button">+ NEUES / ANDERES KONTO VERBINDEN</button>
+      <form id="authConnectForm" class="auth-connect-form hidden">
+        <input type="email" id="authEmailInput" placeholder="E-Mail / Benutzername" required autocomplete="username">
+        <input type="password" id="authNewPasswordInput" placeholder="Passwort (für dieses Gerät)" required autocomplete="new-password">
+        <p class="sync-help">
+          <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">GitHub Personal Access Token</a>
+          (Fine-grained → <b>Gists: Read &amp; Write</b>, oder classic Token mit Scope <b>gist</b>) verbindet das Konto geräteübergreifend über eine private Gist.
+        </p>
+        <input type="password" id="authTokenInput" placeholder="GitHub Token (ghp_...)" required autocomplete="off">
+        <button type="submit">VERBINDEN</button>
+      </form>
+    </div>
+
+    <p id="authError" class="auth-error hidden"></p>
+    <p id="authBusy" class="auth-busy hidden"></p>
+  </div>
+</div>
+
 <div id="app" class="app hidden">
 
   <!-- STATUS BAR -->
   <header class="statusbar">
     <div class="status-id">
       <span class="status-tag">USER</span>
-      <span class="status-value">SILVAN</span>
+      <span class="status-value" id="currentUserLabel">SILVAN</span>
+      <button class="status-logout" id="logoutBtn" type="button" title="Abmelden">⏻</button>
     </div>
     <div class="status-xp">
       <div class="xp-top">

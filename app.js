@@ -4,11 +4,21 @@
    gespiegelt in eine private GitHub Gist (Cloud Sync).
    ============================================================ */
 
-const STORAGE_KEY = "silvanos_data_v2";
-const SYNC_TOKEN_KEY = "silvanos_sync_token";
-const SYNC_GIST_KEY = "silvanos_sync_gistid";
 const GIST_FILENAME = "silvanos-data.json";
 const GIST_DESCRIPTION = "SILVAN.OS data (do not rename the file inside)";
+
+/* multi-account: each account's data/token/gist live under its own key,
+   so several people can share one browser (or the same account can be
+   connected on several devices via its own GitHub token). */
+const ACCOUNTS_KEY = "silvanos_accounts_v1";
+const CURRENT_ACCOUNT_KEY = "silvanos_current_account";
+const LEGACY_STORAGE_KEY = "silvanos_data_v2";
+const LEGACY_SYNC_TOKEN_KEY = "silvanos_sync_token";
+const LEGACY_SYNC_GIST_KEY = "silvanos_sync_gistid";
+
+function accountDataKey(id) { return `silvanos_data_v2::${id}`; }
+function accountTokenKey(id) { return `silvanos_sync_token::${id}`; }
+function accountGistKey(id) { return `silvanos_sync_gistid::${id}`; }
 
 /* fixed training order — always this order, 2x/week */
 const EXERCISES = [
@@ -92,15 +102,17 @@ function defaultData() {
   };
 }
 
-let data = loadData();
+let currentAccountId = null;
+let data = defaultData();
 let selectedExerciseId = EXERCISES[0].id;
 let weekOffset = 0;
 let selectedDate = todayStr();
 let weightChart, exWeightChart, exRepsChart;
 
 function loadData() {
+  if (!currentAccountId) return defaultData();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(accountDataKey(currentAccountId));
     if (!raw) return defaultData();
     const parsed = JSON.parse(raw);
     return { ...defaultData(), ...parsed };
@@ -111,8 +123,9 @@ function loadData() {
 }
 
 function saveData() {
+  if (!currentAccountId) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(accountDataKey(currentAccountId), JSON.stringify(data));
   } catch (e) {
     console.error("Save error", e);
   }
@@ -770,8 +783,9 @@ document.getElementById("importInput").addEventListener("change", e => {
 let syncTimer = null;
 let syncInFlight = false;
 
-function getSyncToken() { return localStorage.getItem(SYNC_TOKEN_KEY); }
-function getGistId() { return localStorage.getItem(SYNC_GIST_KEY); }
+function getSyncToken() { return currentAccountId ? localStorage.getItem(accountTokenKey(currentAccountId)) : null; }
+function getGistId() { return currentAccountId ? localStorage.getItem(accountGistKey(currentAccountId)) : null; }
+function setGistId(id) { if (currentAccountId) localStorage.setItem(accountGistKey(currentAccountId), id); }
 
 function scheduleSync() {
   if (!getSyncToken()) return;
@@ -787,8 +801,8 @@ function setSyncStatus(text, mode) {
   if (mode) el.classList.add(mode);
 }
 
-async function githubRequest(url, options = {}) {
-  const token = getSyncToken();
+async function githubRequest(url, options = {}, tokenOverride) {
+  const token = tokenOverride || getSyncToken();
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -805,10 +819,10 @@ async function githubRequest(url, options = {}) {
   return res.json();
 }
 
-async function findExistingGist() {
+async function findExistingGist(token) {
   let page = 1;
   while (page <= 5) {
-    const gists = await githubRequest(`https://api.github.com/gists?per_page=100&page=${page}`);
+    const gists = await githubRequest(`https://api.github.com/gists?per_page=100&page=${page}`, {}, token);
     if (!gists.length) break;
     const match = gists.find(g => g.files && g.files[GIST_FILENAME]);
     if (match) return match.id;
@@ -818,20 +832,20 @@ async function findExistingGist() {
   return null;
 }
 
-async function createGist() {
+async function createGist(token, initialData) {
   const gist = await githubRequest("https://api.github.com/gists", {
     method: "POST",
     body: JSON.stringify({
       description: GIST_DESCRIPTION,
       public: false,
-      files: { [GIST_FILENAME]: { content: JSON.stringify(data, null, 2) } },
+      files: { [GIST_FILENAME]: { content: JSON.stringify(initialData !== undefined ? initialData : data, null, 2) } },
     }),
-  });
+  }, token);
   return gist.id;
 }
 
-async function pullFromGist(gistId) {
-  const gist = await githubRequest(`https://api.github.com/gists/${gistId}`);
+async function pullFromGist(gistId, token) {
+  const gist = await githubRequest(`https://api.github.com/gists/${gistId}`, {}, token);
   const file = gist.files && gist.files[GIST_FILENAME];
   if (!file || !file.content) return null;
   return JSON.parse(file.content);
@@ -845,14 +859,14 @@ async function pushToGist() {
   try {
     let gistId = getGistId();
     if (!gistId) {
-      gistId = await findExistingGist();
-      if (!gistId) gistId = await createGist();
-      localStorage.setItem(SYNC_GIST_KEY, gistId);
+      gistId = await findExistingGist(token);
+      if (!gistId) gistId = await createGist(token);
+      setGistId(gistId);
     }
     await githubRequest(`https://api.github.com/gists/${gistId}`, {
       method: "PATCH",
       body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(data, null, 2) } } }),
-    });
+    }, token);
     setSyncStatus("verbunden · zuletzt " + new Date().toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }), "connected");
   } catch (e) {
     console.error("Sync push error", e);
@@ -869,15 +883,15 @@ async function initialSyncPull() {
   try {
     let gistId = getGistId();
     if (!gistId) {
-      gistId = await findExistingGist();
-      if (gistId) localStorage.setItem(SYNC_GIST_KEY, gistId);
+      gistId = await findExistingGist(token);
+      if (gistId) setGistId(gistId);
     }
     if (gistId) {
-      const remote = await pullFromGist(gistId);
+      const remote = await pullFromGist(gistId, token);
       if (remote) data = { ...defaultData(), ...remote };
     } else {
-      const newId = await createGist();
-      localStorage.setItem(SYNC_GIST_KEY, newId);
+      const newId = await createGist(token);
+      setGistId(newId);
     }
     setSyncStatus("verbunden · zuletzt " + new Date().toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }), "connected");
   } catch (e) {
@@ -887,14 +901,16 @@ async function initialSyncPull() {
 }
 
 function connectSync(token) {
-  localStorage.setItem(SYNC_TOKEN_KEY, token.trim());
-  localStorage.removeItem(SYNC_GIST_KEY);
+  if (!currentAccountId) return Promise.resolve();
+  localStorage.setItem(accountTokenKey(currentAccountId), token.trim());
+  localStorage.removeItem(accountGistKey(currentAccountId));
   return initialSyncPull().then(renderAll);
 }
 
 function disconnectSync() {
-  localStorage.removeItem(SYNC_TOKEN_KEY);
-  localStorage.removeItem(SYNC_GIST_KEY);
+  if (!currentAccountId) return;
+  localStorage.removeItem(accountTokenKey(currentAccountId));
+  localStorage.removeItem(accountGistKey(currentAccountId));
   setSyncStatus("nicht verbunden", null);
   document.getElementById("syncSetup").classList.add("hidden");
   document.getElementById("syncDisconnectBtn").classList.add("hidden");
@@ -914,6 +930,244 @@ document.getElementById("syncForm").addEventListener("submit", async e => {
   document.getElementById("syncDisconnectBtn").classList.remove("hidden");
 });
 document.getElementById("syncDisconnectBtn").addEventListener("click", () => disconnectSync());
+
+/* ================= ACCOUNTS (multi-user login) =================
+   No backend: password only gates the login screen on this device.
+   Real cross-device continuity comes from each account's own GitHub
+   token pointing at its own private gist (same as Cloud Sync above).
+   ================================================================= */
+
+function loadAccounts() {
+  try {
+    const raw = localStorage.getItem(ACCOUNTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error("loadAccounts error", e);
+    return [];
+  }
+}
+function saveAccounts(list) {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(list));
+}
+function findAccountByEmail(email) {
+  return loadAccounts().find(a => a.email.toLowerCase() === email.toLowerCase());
+}
+function getCurrentAccountId() { return localStorage.getItem(CURRENT_ACCOUNT_KEY); }
+function setCurrentAccountId(id) {
+  currentAccountId = id;
+  if (id) localStorage.setItem(CURRENT_ACCOUNT_KEY, id);
+  else localStorage.removeItem(CURRENT_ACCOUNT_KEY);
+}
+function legacyDataExists() {
+  return !!(localStorage.getItem(LEGACY_STORAGE_KEY) || localStorage.getItem(LEGACY_SYNC_TOKEN_KEY));
+}
+
+function randomSaltB64() {
+  const arr = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...arr));
+}
+async function derivePasswordHash(password, saltB64) {
+  const enc = new TextEncoder();
+  const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  return btoa(String.fromCharCode(...new Uint8Array(bits)));
+}
+async function createAccountRecord(email, password) {
+  const id = "acc_" + Math.random().toString(36).slice(2, 10);
+  const salt = randomSaltB64();
+  const hash = await derivePasswordHash(password, salt);
+  const accounts = loadAccounts();
+  accounts.push({ id, email, salt, hash });
+  saveAccounts(accounts);
+  return id;
+}
+async function verifyPassword(account, password) {
+  const hash = await derivePasswordHash(password, account.salt);
+  return hash === account.hash;
+}
+
+async function migrateLegacyData(email, password) {
+  const id = await createAccountRecord(email, password);
+  const legacyData = localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (legacyData) localStorage.setItem(accountDataKey(id), legacyData);
+  const legacyToken = localStorage.getItem(LEGACY_SYNC_TOKEN_KEY);
+  if (legacyToken) localStorage.setItem(accountTokenKey(id), legacyToken);
+  const legacyGist = localStorage.getItem(LEGACY_SYNC_GIST_KEY);
+  if (legacyGist) localStorage.setItem(accountGistKey(id), legacyGist);
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
+  localStorage.removeItem(LEGACY_SYNC_TOKEN_KEY);
+  localStorage.removeItem(LEGACY_SYNC_GIST_KEY);
+  await enterAccount(id);
+}
+
+async function connectNewAccount(email, password, token) {
+  if (findAccountByEmail(email)) {
+    throw new Error("Diese E-Mail ist auf diesem Gerät schon verbunden — bitte anmelden statt neu verbinden.");
+  }
+  let gistId = await findExistingGist(token);
+  let remoteData;
+  if (gistId) {
+    remoteData = await pullFromGist(gistId, token);
+  } else {
+    remoteData = defaultData();
+    gistId = await createGist(token, remoteData);
+  }
+  const id = await createAccountRecord(email, password);
+  localStorage.setItem(accountTokenKey(id), token);
+  localStorage.setItem(accountGistKey(id), gistId);
+  localStorage.setItem(accountDataKey(id), JSON.stringify({ ...defaultData(), ...remoteData }));
+  await enterAccount(id);
+}
+
+async function enterAccount(id) {
+  setCurrentAccountId(id);
+  data = loadData();
+  document.getElementById("authScreen").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  const account = loadAccounts().find(a => a.id === id);
+  document.getElementById("currentUserLabel").textContent = account ? account.email.split("@")[0].toUpperCase() : "SILVAN";
+  if (getSyncToken()) {
+    document.getElementById("syncDisconnectBtn").classList.remove("hidden");
+    await initialSyncPull();
+  } else {
+    document.getElementById("syncDisconnectBtn").classList.add("hidden");
+    setSyncStatus("nicht verbunden", null);
+  }
+  renderAll();
+}
+
+function logout() {
+  setCurrentAccountId(null);
+  data = defaultData();
+  document.getElementById("app").classList.add("hidden");
+  showAuthScreen();
+}
+
+let authPendingAccount = null;
+
+function renderAuthAccountList() {
+  const listEl = document.getElementById("authAccountList");
+  listEl.innerHTML = "";
+  loadAccounts().forEach(acc => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "auth-account-btn";
+    btn.textContent = acc.email;
+    btn.addEventListener("click", () => showAuthPasswordStep(acc));
+    listEl.appendChild(btn);
+  });
+}
+
+function showAuthPasswordStep(account) {
+  authPendingAccount = account;
+  setAuthError(null);
+  document.getElementById("authPasswordEmail").textContent = account.email;
+  document.getElementById("authPasswordForm").classList.remove("hidden");
+  document.getElementById("authAccountList").classList.add("hidden");
+  document.getElementById("authConnectToggleBtn").classList.add("hidden");
+  document.getElementById("authConnectForm").classList.add("hidden");
+  document.getElementById("authPasswordInput").focus();
+}
+function hideAuthPasswordStep() {
+  authPendingAccount = null;
+  document.getElementById("authPasswordInput").value = "";
+  document.getElementById("authPasswordForm").classList.add("hidden");
+  document.getElementById("authAccountList").classList.remove("hidden");
+  document.getElementById("authConnectToggleBtn").classList.remove("hidden");
+}
+
+function setAuthError(msg) {
+  const el = document.getElementById("authError");
+  if (!msg) { el.classList.add("hidden"); el.textContent = ""; return; }
+  el.textContent = msg;
+  el.classList.remove("hidden");
+}
+function setAuthBusy(msg) {
+  const el = document.getElementById("authBusy");
+  if (!msg) { el.classList.add("hidden"); el.textContent = ""; return; }
+  el.textContent = msg;
+  el.classList.remove("hidden");
+}
+
+function showAuthScreen() {
+  setAuthError(null);
+  setAuthBusy(null);
+  hideAuthPasswordStep();
+  document.getElementById("authConnectForm").classList.add("hidden");
+  renderAuthAccountList();
+  const migrate = legacyDataExists() && loadAccounts().length === 0;
+  document.getElementById("authMigrateForm").classList.toggle("hidden", !migrate);
+  document.getElementById("authMain").classList.toggle("hidden", migrate);
+  document.getElementById("authScreen").classList.remove("hidden");
+}
+
+document.getElementById("authMigrateForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const email = document.getElementById("migrateEmailInput").value.trim();
+  const password = document.getElementById("migratePasswordInput").value;
+  if (!email || !password) return;
+  setAuthError(null);
+  setAuthBusy("Konto wird angelegt…");
+  try {
+    await migrateLegacyData(email, password);
+  } catch (e) {
+    console.error("Migration error", e);
+    setAuthError("Fehler beim Anlegen des Kontos.");
+  } finally {
+    setAuthBusy(null);
+  }
+});
+
+document.getElementById("authPasswordForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!authPendingAccount) return;
+  const password = document.getElementById("authPasswordInput").value;
+  const ok = await verifyPassword(authPendingAccount, password);
+  if (!ok) { setAuthError("Falsches Passwort."); return; }
+  const id = authPendingAccount.id;
+  hideAuthPasswordStep();
+  setAuthBusy("Anmelden…");
+  try {
+    await enterAccount(id);
+  } finally {
+    setAuthBusy(null);
+  }
+});
+document.getElementById("authPasswordBackBtn").addEventListener("click", () => hideAuthPasswordStep());
+
+document.getElementById("authConnectToggleBtn").addEventListener("click", () => {
+  document.getElementById("authConnectForm").classList.toggle("hidden");
+});
+document.getElementById("authConnectForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const emailInput = document.getElementById("authEmailInput");
+  const passwordInput = document.getElementById("authNewPasswordInput");
+  const tokenInput = document.getElementById("authTokenInput");
+  const email = emailInput.value.trim();
+  const password = passwordInput.value;
+  const token = tokenInput.value.trim();
+  if (!email || !password || !token) return;
+  setAuthError(null);
+  setAuthBusy("Verbinde mit GitHub…");
+  try {
+    await connectNewAccount(email, password, token);
+    emailInput.value = "";
+    passwordInput.value = "";
+    tokenInput.value = "";
+  } catch (err) {
+    console.error("Connect account error", err);
+    setAuthError(err.message || "Verbindung fehlgeschlagen — Token prüfen.");
+  } finally {
+    setAuthBusy(null);
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => logout());
 
 /* ---------------- SCANLINE BACKGROUND ---------------- */
 function initScanlines() {
@@ -942,14 +1196,15 @@ if ("serviceWorker" in navigator) {
 /* ---------------- BOOT ---------------- */
 async function boot() {
   initScanlines();
-  if (getSyncToken()) {
-    document.getElementById("syncDisconnectBtn").classList.remove("hidden");
-    await initialSyncPull();
-  }
-  renderAll();
-  setTimeout(() => {
+  setTimeout(async () => {
     document.getElementById("boot").classList.add("hidden");
-    document.getElementById("app").classList.remove("hidden");
+    const savedId = getCurrentAccountId();
+    const account = savedId && loadAccounts().find(a => a.id === savedId);
+    if (account) {
+      await enterAccount(account.id);
+    } else {
+      showAuthScreen();
+    }
   }, 600);
 }
 
