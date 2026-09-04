@@ -90,13 +90,26 @@ function defaultProjects() {
   ];
 }
 
+function defaultFitnessProfile() {
+  return {
+    sex: "m",              // "m" | "w" — used for the BMR formula
+    age: null,
+    heightCm: null,
+    activityLevel: "moderate", // sedentary | light | moderate | active | very_active
+    goalType: "maintain",  // lose | gain | recomp | maintain
+    targetWeight: null,
+    targetDate: null,      // ISO date — deadline used to derive the required rate
+    proteinPerKg: null,    // optional manual override, else derived from goalType
+  };
+}
+
 function defaultData() {
   return {
     xp: 0,
     lastWeightLogDate: null,
     weightLog: [],
-    workoutLog: [], // [{date, exercises: {exId: {done, weight, reps}}}]
-    programStart: null,
+    workoutLog: [], // [{date, session: 1|2, exercises: {exId: {done, weight, reps}}}]
+    fitnessProfile: defaultFitnessProfile(),
     projects: defaultProjects(),
     calendar: {}, // { "YYYY-MM-DD": [{id, text, done}] }
   };
@@ -158,12 +171,22 @@ function showLevelUp(level) {
 }
 
 /* ---------------- HELPERS ---------------- */
-function todayStr() { return new Date().toISOString().slice(0, 10); }
-function monthsSince(dateStr) {
-  if (!dateStr) return null;
-  const start = new Date(dateStr);
-  const now = new Date();
-  return (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1;
+// Local calendar date as YYYY-MM-DD. toISOString() converts to UTC first,
+// which silently rolls the date back (e.g. shortly after local midnight in
+// any UTC+ timezone) — always format from local getFullYear/Month/Date.
+function isoDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function todayStr() { return isoDate(new Date()); }
+// Parse a stored "YYYY-MM-DD" as a local calendar date, not UTC midnight —
+// bare ISO date strings parse as UTC per spec, which can land on the wrong
+// side of midnight once converted to local time (e.g. UTC- timezones).
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 function mondayOf(date) {
   const d = new Date(date);
@@ -171,48 +194,120 @@ function mondayOf(date) {
   d.setDate(d.getDate() - day);
   return d;
 }
-function isoDate(d) { return d.toISOString().slice(0, 10); }
 
-/* ---------------- FITNESS: weight + phase ---------------- */
-function currentPhase() {
-  const m = monthsSince(data.programStart);
-  if (m === null) return null;
-  if (m <= 7) return { phase: "BULK", month: m, of: 7 };
-  if (m <= 10) return { phase: "CUT", month: m - 7, of: 3 };
-  return { phase: "FERTIG", month: null };
+/* time range shared by the weight chart and the exercise history charts */
+let chartRange = "month"; // "week" | "month" | "all"
+function filterByRange(sortedByDate, range) {
+  if (range === "all") return sortedByDate;
+  const cutoff = new Date();
+  if (range === "week") cutoff.setDate(cutoff.getDate() - 7);
+  else cutoff.setMonth(cutoff.getMonth() - 1);
+  const cutoffStr = isoDate(cutoff);
+  return sortedByDate.filter(e => e.date >= cutoffStr);
+}
+function renderRangeToggle() {
+  document.querySelectorAll("#chartRangeToggle button").forEach(b => {
+    b.classList.toggle("active", b.dataset.range === chartRange);
+  });
 }
 
+/* ---------------- FITNESS: nutrition plan (BMR/TDEE-based, editable profile) ---------------- */
+const ACTIVITY_MULTIPLIERS = { sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9 };
+const GOAL_LABELS = { lose: "Abnehmen", gain: "Zunehmen", recomp: "Muskelaufbau", maintain: "Halten" };
+const GOAL_DEFAULT_PROTEIN_PER_KG = { lose: 2.2, gain: 1.8, recomp: 2.0, maintain: 1.7 };
+const GOAL_DEFAULT_DAILY_DELTA = { lose: -500, gain: 300, recomp: 150, maintain: 0 };
+const KCAL_PER_KG_BODY_MASS = 7700; // rough energy density of a kg of body-mass change
+const MAX_SAFE_WEEKLY_CHANGE_KG = 1.0; // clamp aggressive targets to a sustainable rate
+
+function latestWeight() {
+  const sorted = [...data.weightLog].sort((a, b) => a.date.localeCompare(b.date));
+  return sorted.length ? sorted[sorted.length - 1].weight : null;
+}
+
+function computeNutritionPlan() {
+  const p = data.fitnessProfile;
+  const weight = latestWeight();
+  if (!weight || !p.age || !p.heightCm) return null;
+
+  const bmr = p.sex === "w"
+    ? 10 * weight + 6.25 * p.heightCm - 5 * p.age - 161
+    : 10 * weight + 6.25 * p.heightCm - 5 * p.age + 5;
+  const tdee = bmr * (ACTIVITY_MULTIPLIERS[p.activityLevel] || ACTIVITY_MULTIPLIERS.moderate);
+
+  let dailyDelta;
+  let rateInfo = null;
+  if (p.targetWeight && p.targetDate) {
+    const daysLeft = Math.max(1, Math.round((parseLocalDate(p.targetDate) - new Date()) / 86400000));
+    const weeksLeft = Math.max(1, daysLeft / 7);
+    const rawWeeklyChangeKg = (p.targetWeight - weight) / weeksLeft;
+    const weeklyChangeKg = Math.max(-MAX_SAFE_WEEKLY_CHANGE_KG, Math.min(MAX_SAFE_WEEKLY_CHANGE_KG, rawWeeklyChangeKg));
+    dailyDelta = (weeklyChangeKg * KCAL_PER_KG_BODY_MASS) / 7;
+    rateInfo = { weeksLeft, weeklyChangeKg, clamped: weeklyChangeKg !== rawWeeklyChangeKg };
+  } else {
+    dailyDelta = GOAL_DEFAULT_DAILY_DELTA[p.goalType] ?? 0;
+  }
+
+  const kcalFloor = p.sex === "w" ? 1200 : 1500;
+  const targetKcal = Math.max(kcalFloor, Math.round(tdee + dailyDelta));
+
+  const proteinPerKg = p.proteinPerKg || GOAL_DEFAULT_PROTEIN_PER_KG[p.goalType] || 1.8;
+  const proteinG = Math.round(proteinPerKg * weight);
+  const proteinKcal = proteinG * 4;
+  const fatG = Math.round((targetKcal * 0.25) / 9);
+  const fatKcal = fatG * 9;
+  const carbsG = Math.max(0, Math.round((targetKcal - proteinKcal - fatKcal) / 4));
+
+  return {
+    weight, bmr: Math.round(bmr), tdee: Math.round(tdee), dailyDelta: Math.round(dailyDelta),
+    targetKcal, proteinG, fatG, carbsG, rateInfo,
+  };
+}
+
+function populateGoalForm() {
+  const p = data.fitnessProfile;
+  document.getElementById("goalSex").value = p.sex;
+  document.getElementById("goalAge").value = p.age ?? "";
+  document.getElementById("goalHeight").value = p.heightCm ?? "";
+  document.getElementById("goalActivity").value = p.activityLevel;
+  document.getElementById("goalType").value = p.goalType;
+  document.getElementById("goalTargetWeight").value = p.targetWeight ?? "";
+  document.getElementById("goalTargetDate").value = p.targetDate ?? "";
+  document.getElementById("goalProteinOverride").value = p.proteinPerKg ?? "";
+}
+
+/* ---------------- FITNESS: weight + nutrition rendering ---------------- */
 function renderFitness() {
-  const phaseInfo = currentPhase();
+  const plan = computeNutritionPlan();
+  const p = data.fitnessProfile;
   const phaseLabel = document.getElementById("phaseLabel");
   const macroReadout = document.getElementById("macroReadout");
   const targetWeightEl = document.getElementById("targetWeight");
 
-  if (!phaseInfo) {
-    phaseLabel.textContent = "Kein Startdatum gesetzt";
-    macroReadout.innerHTML = "Setze dein Programmstart-Datum, um Phase &amp; Makros zu sehen.";
-    targetWeightEl.textContent = "--.- kg";
-  } else if (phaseInfo.phase === "BULK") {
-    phaseLabel.textContent = `BULK — Monat ${phaseInfo.month}/${phaseInfo.of}`;
-    macroReadout.innerHTML = `<b>3450–3500</b> kcal/Tag · <b>175–190g</b> Protein<br>Ziel: ~85kg @ 15–16% KFA (+0.9kg/Monat)`;
-    targetWeightEl.textContent = "85.0 kg";
-  } else if (phaseInfo.phase === "CUT") {
-    phaseLabel.textContent = `CUT — Monat ${phaseInfo.month}/${phaseInfo.of}`;
-    macroReadout.innerHTML = `<b>2350–2450</b> kcal/Tag · <b>200–210g</b> Protein<br>Ziel: 82–83kg @ 10–11% KFA`;
-    targetWeightEl.textContent = "82–83 kg";
+  targetWeightEl.textContent = p.targetWeight ? `${p.targetWeight.toFixed(1)} kg` : "--.- kg";
+
+  if (!plan) {
+    phaseLabel.textContent = `Ziel: ${GOAL_LABELS[p.goalType]} · Profil unvollständig`;
+    macroReadout.innerHTML = "Gewicht loggen sowie Alter &amp; Grösse im Profil eintragen, um Kalorien &amp; Makros zu berechnen.";
   } else {
-    phaseLabel.textContent = "Programm abgeschlossen 🎉";
-    macroReadout.innerHTML = "10-Monats-Plan durchlaufen. Zeit für ein neues Ziel.";
-    targetWeightEl.textContent = "--.- kg";
+    let rateText = "";
+    if (plan.rateInfo) {
+      const weeks = Math.round(plan.rateInfo.weeksLeft);
+      const rate = plan.rateInfo.weeklyChangeKg;
+      rateText = ` · ${weeks} Wochen verbleibend (${rate >= 0 ? "+" : ""}${rate.toFixed(2)}kg/Woche${plan.rateInfo.clamped ? ", gedrosselt" : ""})`;
+    }
+    phaseLabel.textContent = `${GOAL_LABELS[p.goalType]}${rateText}`;
+    macroReadout.innerHTML =
+      `<b>${plan.targetKcal}</b> kcal/Tag · <b>${plan.proteinG}g</b> Protein · ${plan.fatG}g Fett · ${plan.carbsG}g Kohlenhydrate<br>` +
+      `TDEE ${plan.tdee} kcal (BMR ${plan.bmr}) ${plan.dailyDelta >= 0 ? "+" : ""}${plan.dailyDelta} kcal/Tag`;
   }
 
   const sorted = [...data.weightLog].sort((a, b) => a.date.localeCompare(b.date));
   const last7 = sorted.slice(-7);
   const avg = last7.length ? (last7.reduce((s, e) => s + e.weight, 0) / last7.length) : null;
   document.getElementById("avgWeight").textContent = avg ? avg.toFixed(1) + " kg" : "--.- kg";
-  document.getElementById("programStart").value = data.programStart || "";
 
-  renderWeightChart(sorted);
+  renderRangeToggle();
+  renderWeightChart(filterByRange(sorted, chartRange));
   renderExerciseList();
   renderExerciseHistory();
 }
@@ -240,22 +335,46 @@ function renderWeightChart(sorted) {
   });
 }
 
-/* ---------------- FITNESS: exercises (weight + reps tracking) ---------------- */
-function getTodayWorkoutEntry(create) {
-  const today = todayStr();
-  let entry = data.workoutLog.find(w => w.date === today);
-  if (!entry && create) {
-    entry = { date: today, exercises: {} };
+/* ---------------- FITNESS: exercises (weight + reps tracking) ----------------
+   Two weekly training sessions, tracked as explicit tabs rather than tied to
+   "today" — lets you log both this week's sessions (even on the same day, or
+   backfill a past one) so the history charts get one real data point per
+   session instead of at most one per calendar day. */
+let selectedSession = 1;
+
+function currentWeekMonday() { return isoDate(mondayOf(new Date())); }
+
+function findWeekSessionEntry(session) {
+  const monday = currentWeekMonday();
+  return data.workoutLog.find(w => isoDate(mondayOf(parseLocalDate(w.date))) === monday && (w.session || 1) === session);
+}
+
+function getOrCreateWeekSessionEntry(session) {
+  let entry = findWeekSessionEntry(session);
+  if (!entry) {
+    entry = { date: todayStr(), session, exercises: {} };
     data.workoutLog.push(entry);
   }
   return entry;
 }
 
+function renderSessionTabs() {
+  [1, 2].forEach(session => {
+    const btn = document.querySelector(`.session-tab[data-session="${session}"]`);
+    const entry = findWeekSessionEntry(session);
+    const done = entry && Object.values(entry.exercises).some(e => e.done);
+    btn.classList.toggle("active", selectedSession === session);
+    btn.classList.toggle("done", !!done);
+    btn.textContent = `TRAINING ${session}${done ? " ✓" : ""}`;
+  });
+  const entry = findWeekSessionEntry(selectedSession);
+  document.getElementById("sessionDateInput").value = entry ? entry.date : todayStr();
+}
+
 function renderExerciseList() {
   const list = document.getElementById("exerciseList");
   list.innerHTML = "";
-  const today = todayStr();
-  const entry = data.workoutLog.find(w => w.date === today);
+  const entry = findWeekSessionEntry(selectedSession);
 
   EXERCISES.forEach(ex => {
     const rec = entry && entry.exercises[ex.id] ? entry.exercises[ex.id] : { done: false, weight: "", reps: "" };
@@ -270,16 +389,17 @@ function renderExerciseList() {
     list.appendChild(row);
   });
 
-  const now = new Date();
-  const mondayStr = isoDate(mondayOf(now));
-  const trainedDates = new Set(
-    data.workoutLog.filter(w => w.date >= mondayStr && Object.values(w.exercises).some(e => e.done)).map(w => w.date)
-  );
-  document.getElementById("workoutStreak").textContent = trainedDates.size;
+  const trainedSessions = [1, 2].filter(s => {
+    const e = findWeekSessionEntry(s);
+    return e && Object.values(e.exercises).some(x => x.done);
+  });
+  document.getElementById("workoutStreak").textContent = trainedSessions.length;
+
+  renderSessionTabs();
 }
 
 function updateExerciseField(exId, field, rawValue) {
-  const entry = getTodayWorkoutEntry(true);
+  const entry = getOrCreateWeekSessionEntry(selectedSession);
   if (!entry.exercises[exId]) entry.exercises[exId] = { done: false, weight: null, reps: null };
   const rec = entry.exercises[exId];
   const wasDone = rec.done;
@@ -313,10 +433,11 @@ function renderExerciseHistory() {
     select.value = selectedExerciseId;
   }
 
-  const points = data.workoutLog
+  const allPoints = data.workoutLog
     .filter(w => w.exercises[selectedExerciseId] && (w.exercises[selectedExerciseId].weight != null || w.exercises[selectedExerciseId].reps != null))
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(w => ({ date: w.date, weight: w.exercises[selectedExerciseId].weight, reps: w.exercises[selectedExerciseId].reps }));
+  const points = filterByRange(allPoints, chartRange);
 
   const labels = points.map(p => p.date.slice(5));
 
@@ -733,10 +854,48 @@ document.getElementById("weightForm").addEventListener("submit", e => {
   renderFitness();
 });
 
-document.getElementById("programStart").addEventListener("change", e => {
-  data.programStart = e.target.value || null;
+document.getElementById("goalToggleBtn").addEventListener("click", () => {
+  populateGoalForm();
+  document.getElementById("goalForm").classList.toggle("hidden");
+});
+
+document.getElementById("goalForm").addEventListener("submit", e => {
+  e.preventDefault();
+  data.fitnessProfile = {
+    sex: document.getElementById("goalSex").value,
+    age: parseInt(document.getElementById("goalAge").value, 10) || null,
+    heightCm: parseFloat(document.getElementById("goalHeight").value) || null,
+    activityLevel: document.getElementById("goalActivity").value,
+    goalType: document.getElementById("goalType").value,
+    targetWeight: parseFloat(document.getElementById("goalTargetWeight").value) || null,
+    targetDate: document.getElementById("goalTargetDate").value || null,
+    proteinPerKg: parseFloat(document.getElementById("goalProteinOverride").value) || null,
+  };
   saveData();
+  document.getElementById("goalForm").classList.add("hidden");
   renderFitness();
+});
+
+document.getElementById("chartRangeToggle").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-range]");
+  if (!btn) return;
+  chartRange = btn.dataset.range;
+  renderFitness();
+});
+
+document.getElementById("sessionTabs").addEventListener("click", e => {
+  const btn = e.target.closest(".session-tab");
+  if (!btn) return;
+  selectedSession = parseInt(btn.dataset.session, 10);
+  renderExerciseList();
+});
+
+document.getElementById("sessionDateInput").addEventListener("change", e => {
+  const entry = getOrCreateWeekSessionEntry(selectedSession);
+  entry.date = e.target.value || todayStr();
+  saveData();
+  renderExerciseList();
+  renderExerciseHistory();
 });
 
 document.getElementById("exerciseList").addEventListener("change", e => {
