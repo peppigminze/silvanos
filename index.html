@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>SILVAN.OS</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0A0E14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SILVAN.OS">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="scanlines"></canvas>
+
+<div id="boot" class="boot">
+  <div class="boot-line">SILVAN.OS v2.0 — INITIALIZING<span class="cursor">_</span></div>
+</div>
+
+<div id="app" class="app hidden">
+
+  <!-- STATUS BAR -->
+  <header class="statusbar">
+    <div class="status-id">
+      <span class="status-tag">USER</span>
+      <span class="status-value">SILVAN</span>
+    </div>
+    <div class="status-xp">
+      <div class="xp-top">
+        <span class="status-tag">LVL <b id="level">1</b></span>
+        <span class="xp-numbers"><span id="xpCurrent">0</span> / <span id="xpNext">100</span> XP</span>
+      </div>
+      <div class="xp-bar"><div class="xp-bar-fill" id="xpBarFill"></div></div>
+    </div>
+    <div class="status-date">
+      <span class="status-tag">HEUTE</span>
+      <span class="status-value" id="todayDate">--</span>
+    </div>
+  </header>
+
+  <!-- LEVEL UP TOAST -->
+  <div id="levelUpToast" class="levelup-toast hidden">LEVEL UP → <span id="levelUpNum"></span></div>
+
+  <!-- CLOUD SYNC -->
+  <section class="panel sync-panel" id="panel-sync">
+    <div class="sync-row">
+      <span class="status-tag">CLOUD SYNC</span>
+      <span class="sync-status" id="syncStatus">nicht verbunden</span>
+      <button class="sync-toggle" id="syncToggleBtn">EINRICHTEN</button>
+    </div>
+    <div class="sync-setup hidden" id="syncSetup">
+      <p class="sync-help">
+        Erstelle einen <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">GitHub Personal Access Token</a>
+        (Fine-grained, nur Berechtigung <b>Gists: Read & Write</b>, oder classic Token mit Scope <b>gist</b>).
+        Der Token wird nur lokal in deinem Browser gespeichert, nie irgendwo hochgeladen ausser direkt zu GitHub.
+      </p>
+      <form id="syncForm" class="inline-form sync-form">
+        <input type="password" id="syncTokenInput" placeholder="GitHub Token (ghp_...)">
+        <button type="submit">VERBINDEN</button>
+      </form>
+      <button class="sync-disconnect hidden" id="syncDisconnectBtn">TRENNEN</button>
+    </div>
+  </section>
+
+  <main class="grid">
+
+    <!-- FITNESS: hero panel -->
+    <section class="panel panel-hero" id="panel-fitness">
+      <div class="panel-head">
+        <h2>01 · FITNESS</h2>
+        <span class="panel-sub" id="phaseLabel">Phase --</span>
+      </div>
+
+      <div class="fitness-grid">
+        <div class="fitness-chart-wrap">
+          <canvas id="weightChart" height="180"></canvas>
+        </div>
+
+        <div class="fitness-side">
+          <div class="stat-row">
+            <div class="stat">
+              <span class="stat-label">Ø 7 Tage</span>
+              <span class="stat-value" id="avgWeight">--.- kg</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Ziel-Phase</span>
+              <span class="stat-value" id="targetWeight">--.- kg</span>
+            </div>
+          </div>
+
+          <form id="weightForm" class="inline-form">
+            <input type="number" step="0.1" id="weightInput" placeholder="Gewicht heute (kg)" required>
+            <button type="submit">LOG</button>
+          </form>
+
+          <div class="macro-readout" id="macroReadout"></div>
+
+          <div class="program-setup">
+            <label>Programmstart:
+              <input type="date" id="programStart">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="workout-block">
+        <div class="workout-head">
+          <span class="panel-sub">Trainings diese Woche: <b id="workoutStreak">0</b> / 2</span>
+        </div>
+        <div class="exercise-list-head">
+          <span></span><span>Übung</span><span>kg</span><span>Wdh.</span>
+        </div>
+        <div class="exercise-list" id="exerciseList"></div>
+      </div>
+
+      <div class="exercise-history">
+        <div class="panel-head" style="margin-bottom:10px;">
+          <h2 style="font-size:12px;">ÜBUNGS-VERLAUF</h2>
+          <select id="exerciseSelect" class="exercise-select"></select>
+        </div>
+        <div class="history-charts">
+          <div class="history-chart-wrap">
+            <canvas id="exWeightChart" height="120"></canvas>
+          </div>
+          <div class="history-chart-wrap">
+            <canvas id="exRepsChart" height="120"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SIDE COLUMN: dynamic projects -->
+    <div class="side-col" id="projectsContainer">
+      <!-- project panels injected by app.js -->
+    </div>
+
+    <!-- add new project -->
+    <button class="add-project-btn" id="addProjectBtn">+ NEUES PROJEKT / TAB</button>
+
+    <!-- DAILY CALENDAR: full width -->
+    <section class="panel panel-wide" id="panel-calendar">
+      <div class="panel-head">
+        <h2 id="calendarNumber">· TAGESPLANER</h2>
+        <span class="panel-sub" id="calendarWeekLabel">--</span>
+      </div>
+
+      <div class="calendar-week">
+        <button class="week-nav" id="weekPrevBtn">‹</button>
+        <div class="week-days" id="weekDays"></div>
+        <button class="week-nav" id="weekNextBtn">›</button>
+      </div>
+
+      <div class="calendar-day">
+        <div class="calendar-day-head" id="calendarDayLabel">--</div>
+        <div class="day-task-list" id="dayTaskList"></div>
+        <form id="dayTaskForm" class="inline-form">
+          <input type="text" id="dayTaskInput" placeholder="Neue Aufgabe für diesen Tag...">
+          <button type="submit">+</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <button id="exportBtn">EXPORT DATA</button>
+    <label class="import-label">IMPORT DATA<input type="file" id="importInput" accept="application/json" hidden></label>
+    <span class="footer-note">Daten lokal gespeichert · optional Cloud-Sync via GitHub Gist</span>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
